@@ -1,0 +1,221 @@
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+from PyQt5 import QtCore, QtGui, QtWidgets
+import sys
+
+import cv2
+import EasyPySpin
+
+import matplotlib
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.pyplot as plt
+import numpy as np
+import matplotlib as mpl
+from mpl_toolkits.mplot3d import Axes3D
+
+from wavewritemof import SignalWriter
+
+
+class Ui_Window(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super(Ui_Window, self).__init__(parent)
+        self.timer_camera = QtCore.QTimer()
+        self.cap = EasyPySpin.VideoCapture()
+        self.set_ui()
+        self.slot_init()
+        self.writeThread = SignalWriter(x_offset=0, y_offset=0, z_offset=0)
+
+    # layout
+    def set_ui(self):
+        self.__layout_main = QtWidgets.QHBoxLayout()  # 总布局
+        self.__layout_fun_button = QtWidgets.QVBoxLayout()  # 按键布局
+        self.__layout_data_show = QtWidgets.QVBoxLayout()  # 视频布局
+
+        # 按键
+        self.button_open_camera = QtWidgets.QPushButton('打开相机')  # 建立打开摄像头的按键
+        self.button_close = QtWidgets.QPushButton('退出')
+        self.button_wave = QtWidgets.QPushButton('磁场可视化')
+
+        # 创建一个QGraphicsScene 加载的图像不能放在graphicview,先放在graphicScene再放在graphicview
+        self.graphicscene = QtWidgets.QGraphicsScene()
+        canvas = self.plot_init()
+        self.graphicscene.addWidget(canvas)  # 添加控件
+        self.graphicView = QtWidgets.QGraphicsView()
+        self.graphicView.setFixedSize(640, 640)
+        self.graphicView.setScene(self.graphicscene)
+        self.graphicView.show()
+
+        self.button_open_camera.setMaximumHeight(50)  # 设置按键的大小
+        self.button_close.setMaximumHeight(50)
+        self.button_wave.setMaximumHeight(50)
+        # self.button_close.move(10, 100)
+
+        # 视频显示
+        self.label_show_camera = QtWidgets.QLabel()  # 定义显示视频的label
+        self.label_show_camera.setFixedSize(641, 481)  # 设置Label的大小
+
+        # 按键加入按键布局
+        self.__layout_fun_button.addWidget(self.button_open_camera)
+        self.__layout_fun_button.addWidget(self.button_close)
+        self.__layout_fun_button.addWidget(self.button_wave)
+
+        # 控件加入总布局
+        self.__layout_main.addLayout(self.__layout_fun_button)
+        self.__layout_main.addWidget(self.label_show_camera)
+        self.__layout_main.addWidget(self.graphicView)
+
+        self.__layout_label = QtWidgets.QVBoxLayout()
+        self.label_Pitch = QtWidgets.QLabel()
+        self.label_Pitch.setText("pitch")
+        self.label_Yaw = QtWidgets.QLabel()
+        self.label_Yaw.setText("yaw")
+        self.label_xdc = QtWidgets.QLabel()
+        self.label_xdc.setText("xdc")
+        self.label_ydc = QtWidgets.QLabel()
+        self.label_ydc.setText("ydc")
+        self.label_zdc = QtWidgets.QLabel()
+        self.label_zdc.setText("zdc")
+        self.__layout_label.addWidget(self.label_Pitch)
+        self.__layout_label.addWidget(self.label_Yaw)
+        self.__layout_label.addWidget(self.label_xdc)
+        self.__layout_label.addWidget(self.label_ydc)
+        self.__layout_label.addWidget(self.label_zdc)
+
+        self.__layout_spinBox = QtWidgets.QVBoxLayout()
+        self.spinBox_Pitch = QtWidgets.QSpinBox()
+        self.spinBox_Pitch.setObjectName("pitch")
+        self.spinBox_Yaw = QtWidgets.QSpinBox()
+        self.spinBox_Yaw.setObjectName("yaw")
+        self.spinBox_xdc = QtWidgets.QSpinBox()
+        self.spinBox_xdc.setObjectName("xdc")
+        self.spinBox_ydc = QtWidgets.QSpinBox()
+        self.spinBox_ydc.setObjectName("ydc")
+        self.spinBox_zdc = QtWidgets.QSpinBox()
+        self.spinBox_zdc.setObjectName("zdc")
+        self.__layout_spinBox.addWidget(self.spinBox_Pitch)
+        self.__layout_spinBox.addWidget(self.spinBox_Yaw)
+        self.__layout_spinBox.addWidget(self.spinBox_xdc)
+        self.__layout_spinBox.addWidget(self.spinBox_ydc)
+        self.__layout_spinBox.addWidget(self.spinBox_zdc)
+
+        self.__layout_main.addLayout(self.__layout_label)
+        self.__layout_main.addLayout(self.__layout_spinBox)
+
+        # 显示所有控件
+        self.setLayout(self.__layout_main)
+
+    # 初始化槽函数
+    def slot_init(self):
+        self.button_open_camera.clicked.connect(self.button_open_camera_clicked)
+        # 按键点击，调用button_open_camera_clicked
+        self.timer_camera.timeout.connect(self.show_camera)  # 若定时器结束调用show_camera
+        self.button_close.clicked.connect(self.close)
+        self.button_wave.clicked.connect(self.plot)
+        self.spinBox_Pitch.valueChanged.connect(self.MF)
+        self.spinBox_Yaw.valueChanged.connect(self.MF)
+        self.spinBox_xdc.valueChanged.connect(self.DC_MF)
+        self.spinBox_ydc.valueChanged.connect(self.DC_MF)
+        self.spinBox_zdc.valueChanged.connect(self.DC_MF)
+
+    def button_open_camera_clicked(self):
+        if self.timer_camera.isActive() == False:  # 若定时器没有启动
+            flag = self.cap.open(0)
+            if flag == False:
+                msg = QtWidgets.QMessageBox.warning(self, 'warning', "请检查相机与电脑连接是否正确",
+                                                    buttons=QtWidgets.QMessageBox.Ok)
+            else:
+                self.timer_camera.start(30)
+                self.button_open_camera.setText('关闭相机')
+        else:
+            self.timer_camera.stop()  # 关闭定时器
+            self.cap.release()  # 释放视频流
+            self.label_show_camera.clear()  # 清空视频显示区
+            self.button_open_camera.setText('打开相机')
+
+    def show_camera(self):
+        flag, self.image = self.cap.read()  # 从视频流中读取
+        show = cv2.resize(self.image, (640, 480))
+        show = cv2.cvtColor(show, cv2.COLOR_GRAY2RGB)
+        # cv2.imshow('img',show)
+        showImage = QtGui.QImage(show.data, show.shape[1], show.shape[0],
+                                 QtGui.QImage.Format_RGB888)  # 将视频转换成QImage形式
+        self.label_show_camera.setPixmap(QtGui.QPixmap.fromImage(showImage))  # 在视频的Label中显示QImage的值
+
+    def plot_init(self):
+        figure = plt.figure(dpi=120)
+        ax = figure.add_axes(Axes3D(figure))
+        canvas = FigureCanvas(figure)
+        theta = np.linspace(0, 2 * np.pi, 100)
+        z = 0*theta
+        x = 0*theta
+        y = 0*theta
+        ax.plot(x, y, z, label='parametric curve')
+        canvas.draw()
+        return canvas
+
+    def plot(self, pitch=0, yaw=0, beta=90, gama=1):
+        # self.graphicscene.clear()
+        # plt.cla()
+        # plt.close("all")
+        # plt.clf()
+        figure = plt.figure(dpi=120)
+        ax = figure.add_axes(Axes3D(figure))
+        canvas = FigureCanvas(figure)
+        theta = np.linspace(0, 2 * np.pi, 100)
+        beta = beta*np.pi/180
+        ampx = np.sqrt((gama*np.cos(beta))**2+(np.sin(beta))**2)
+        ampy = np.sqrt((gama*np.sin(beta))**2+(np.cos(beta))**2)
+        if np.sin(beta) == 0:
+            phax = -np.pi/2
+            phay = 0
+        elif np.cos(beta) == 0:
+            phax = 0
+            phay = -np.pi/2
+        else:
+            phax = np.arctan((-gama*np.cos(beta))/(np.sin(beta)))
+            phay = np.arctan((gama*np.sin(beta))/(np.cos(beta)))
+        pitch = pitch*np.pi/180
+        yaw = yaw*np.pi/180
+        z = np.sin(pitch)*np.sin(theta+yaw)
+        x = np.cos(pitch)*ampx*np.sin(theta+phax)
+        y = np.cos(pitch)*ampy*np.sin(theta+phay)
+        # z = 0
+        # x = np.sin(theta)
+        # y = np.cos(theta)
+        ax.plot(x, y, z, label='parametric curve')
+        ax.set_xlim(-1, 1)
+        ax.set_ylim(-1, 1)
+        ax.set_zlim(-1, 1)
+        canvas.draw()
+        self.graphicscene.addWidget(canvas)  # 添加控件
+        self.graphicView.show()
+        plt.close()
+
+    def MF(self):
+        pitch = self.spinBox_Pitch.value()
+        yaw = self.spinBox_Yaw.value()
+        self.plot(pitch=pitch, yaw=yaw)
+
+    def DC_MF(self):
+        x_offset = self.spinBox_xdc.value()
+        y_offset = self.spinBox_ydc.value()
+        z_offset = self.spinBox_zdc.value()
+        # print(x_offset)
+        # print(y_offset)
+        # print(z_offset)
+        self.writeThread.x = x_offset
+        self.writeThread.y = y_offset
+        self.writeThread.z = z_offset
+        try:
+            self.writeThread.start()
+        except Exception as e:
+            print('DC_problem')
+            return
+
+
+if __name__ == '__main__':
+    app = QtWidgets.QApplication(sys.argv)  # 固定的表示程序应用
+    ui = Ui_Window()  # 实例化
+    ui.show()  # 调用show(),源于父类QtWigets.QWidget
+    sys.exit(app.exec())
